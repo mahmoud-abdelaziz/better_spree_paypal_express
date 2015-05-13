@@ -4,38 +4,23 @@ module Spree
 
     def express
       order = current_order || raise(ActiveRecord::RecordNotFound)
-      items = order.line_items.map(&method(:line_item))
+      paypal_config
+      ppr = PayPal::Recurring.new({
+        :return_url   => confirm_paypal_url(:payment_method_id => params[:payment_method_id], :utm_nooverride => 1),
+        :cancel_url   => "http://example.com/paypal/canceled",
+        :ipn_url      => "http://example.com/paypal/ipn",
+        :description  => "Awesome - Monthly Subscription",
+        :amount       => order.total,
+        :currency     => order.currency
+      })
 
-      tax_adjustments = order.all_adjustments.tax.additional
-      shipping_adjustments = order.all_adjustments.shipping
-
-      order.all_adjustments.eligible.each do |adjustment|
-        next if (tax_adjustments + shipping_adjustments).include?(adjustment)
-        items << {
-          :Name => adjustment.label,
-          :Quantity => 1,
-          :Amount => {
-            :currencyID => order.currency,
-            :value => adjustment.amount
-          }
-        }
-      end
-
-      # Because PayPal doesn't accept $0 items at all.
-      # See #10
-      # https://cms.paypal.com/uk/cgi-bin/?cmd=_render-content&content_ID=developer/e_howto_api_ECCustomizing
-      # "It can be a positive or negative value but not zero."
-      items.reject! do |item|
-        item[:Amount][:value].zero?
-      end
-      pp_request = provider.build_set_express_checkout(express_checkout_request_details(order, items))
-
+      
       begin
-        pp_response = provider.set_express_checkout(pp_request)
-        if pp_response.success?
-          redirect_to provider.express_checkout_url(pp_response, :useraction => 'commit')
+        response = ppr.checkout
+        if response.valid?
+          redirect_to response.checkout_url
         else
-          flash[:error] = Spree.t('flash.generic_error', :scope => 'paypal', :reasons => pp_response.errors.map(&:long_message).join(" "))
+          flash[:error] = Spree.t('flash.generic_error', :scope => 'paypal', :reasons => response.errors.join(" "))
           redirect_to checkout_state_path(:payment)
         end
       rescue SocketError
@@ -96,8 +81,10 @@ module Spree
           :LandingPage => payment_method.preferred_landing_page.present? ? payment_method.preferred_landing_page : "Billing",
           :cppheaderimage => payment_method.preferred_logourl.present? ? payment_method.preferred_logourl : "",
           :NoShipping => 1,
+          :BillingType => "RecurringPayments",
           :PaymentDetails => [payment_details(items)]
-      }}
+        },
+      }
     end
 
     def payment_method
@@ -106,6 +93,16 @@ module Spree
 
     def provider
       payment_method.provider
+    end
+
+    def paypal_config
+      gateway_preferences = payment_method.preferences
+      PayPal::Recurring.configure do |config|
+        config.sandbox = gateway_preferences[:server] == "sandbox"
+        config.username = gateway_preferences[:login]
+        config.password = gateway_preferences[:password]
+        config.signature = gateway_preferences[:signature]
+      end
     end
 
     def payment_details items

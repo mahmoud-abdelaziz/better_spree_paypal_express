@@ -23,6 +23,14 @@ module Spree
         :username  => preferred_login,
         :password  => preferred_password,
         :signature => preferred_signature)
+
+      PayPal::Recurring.configure do |config|
+        config.sandbox = preferred_server == "sandbox"
+        config.username = preferred_login
+        config.password = preferred_password
+        config.signature = preferred_signature
+      end
+
       provider_class.new
     end
 
@@ -48,15 +56,20 @@ module Spree
           :PaymentDetails => pp_details_response.get_express_checkout_details_response_details.PaymentDetails
         }
       })
-
       pp_response = provider.do_express_checkout_payment(pp_request)
+
       if pp_response.success?
         # We need to store the transaction id for the future.
         # This is mainly so we can use it later on to refund the payment if the user wishes.
         transaction_id = pp_response.do_express_checkout_payment_response_details.payment_info.first.transaction_id
         express_checkout.update_column(:transaction_id, transaction_id)
         # This is rather hackish, required for payment/processing handle_response code.
-        Class.new do
+
+        # Create PAYPAL recurring profile
+        recurring_profile_id = create_recurrling(amount, express_checkout, gateway_options)
+        express_checkout.update_column(:profile_id, recurring_profile_id)
+
+        return Class.new do
           def success?; true; end
           def authorization; nil; end
         end.new
@@ -98,6 +111,30 @@ module Spree
         )
       end
       refund_transaction_response
+    end
+
+    private
+    def create_recurrling(amount, express_checkout, gateway_options)
+      amount = (amount/100.0).to_s
+
+      # Get the checkout cart description ### IF THE TWO DESCRIPTOIN NOT THE SAME, AN ERROR WILL HAPPEND
+      checkout = PayPal::Recurring.new(token: express_checkout.token)
+      checkout_description = checkout.checkout_details
+
+      ppr = PayPal::Recurring.new(
+        amount:      amount, 
+        currency:    gateway_options[:currency], 
+        description: checkout_description.description, 
+        frequency:   1, 
+        token:       express_checkout.token, 
+        period:      :monthly, 
+        payer_id:    express_checkout.payer_id, 
+        start_at:    Time.now, 
+        failed:      1, 
+        outstanding: :next_billing 
+      ) 
+      response = ppr.create_recurring_profile
+      return response.profile_id
     end
   end
 end
