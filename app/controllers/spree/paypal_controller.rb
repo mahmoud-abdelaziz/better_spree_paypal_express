@@ -7,9 +7,8 @@ module Spree
       paypal_config
       ppr = PayPal::Recurring.new({
         :return_url   => confirm_paypal_url(:payment_method_id => params[:payment_method_id], :utm_nooverride => 1),
-        :cancel_url   => "http://example.com/paypal/canceled",
-        :ipn_url      => "http://example.com/paypal/ipn",
-        :description  => "Awesome - Monthly Subscription",
+        :cancel_url   => root_url,
+        :description  => "Monthly Subscription",
         :amount       => order.total,
         :currency     => order.currency
       })
