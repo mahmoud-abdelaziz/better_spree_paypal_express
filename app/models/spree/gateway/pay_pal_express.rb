@@ -45,6 +45,7 @@ module Spree
     def purchase(amount, express_checkout, gateway_options={})
       # Create PAYPAL recurring profile
       response = create_recurrling(amount, express_checkout, gateway_options)
+      response = normalize_response(response)
 
       if response.success?
         express_checkout.update_column(:profile_id, response.profile_id)
@@ -54,43 +55,21 @@ module Spree
           def authorization; nil; end
         end.new
       else
-        class << response
-          def to_s
-            errors.map(&:long_message).join(" ")
-          end
-        end
         response
       end
     end
 
+    # This method will cancel the recurring 
+    # TODO If we have the transaction_id, we will be able to refund that user
     def refund(payment, amount)
-      refund_type = payment.amount == amount.to_f ? "Full" : "Partial"
-      refund_transaction = provider.build_refund_transaction({
-        :TransactionID => payment.source.transaction_id,
-        :RefundType => refund_type,
-        :Amount => {
-          :currencyID => payment.currency,
-          :value => amount },
-        :RefundSource => "any" })
-      refund_transaction_response = provider.refund_transaction(refund_transaction)
-      if refund_transaction_response.success?
-        payment.source.update_attributes({
-          :refunded_at => Time.now,
-          :refund_transaction_id => refund_transaction_response.RefundTransactionID,
-          :state => "refunded",
-          :refund_type => refund_type
-        })
+      express_checkout = payment.source
+      
+      payment.payment_method.provider # Activate the recurring gem 
+      ppr = PayPal::Recurring.new(:profile_id => express_checkout.profile_id)
 
-        payment.class.create!(
-          :order => payment.order,
-          :source => payment,
-          :payment_method => payment.payment_method,
-          :amount => amount.to_f.abs * -1,
-          :response_code => refund_transaction_response.RefundTransactionID,
-          :state => 'completed'
-        )
-      end
-      refund_transaction_response
+      response = ppr.cancel
+      response = normalize_response(response)
+      response
     end
 
     private
@@ -115,6 +94,40 @@ module Spree
       ) 
       response = ppr.create_recurring_profile
       return response
+    end
+
+    # Changes the response object to handle spree gateway methods
+    def normalize_response(response)
+      response.instance_eval do 
+        def errors
+          old_errors = super
+          new_errors = old_errors.map do |old_error|
+
+            error_message = if old_error.is_a?(Hash)
+              old_error[:messages].uniq.join(",") if old_error[:messages]
+            else
+              old_error
+            end
+            error_message.instance_eval do
+              def message 
+                self
+              end
+
+              def long_message 
+                self
+              end
+            end
+            error_message
+          end
+
+        end
+
+        def to_s
+          errors.map(&:long_message).join(" ")
+        end
+      end
+
+      response
     end
   end
 end
