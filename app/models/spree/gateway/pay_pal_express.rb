@@ -43,43 +43,23 @@ module Spree
     end
 
     def purchase(amount, express_checkout, gateway_options={})
-      pp_details_request = provider.build_get_express_checkout_details({
-        :Token => express_checkout.token
-      })
-      pp_details_response = provider.get_express_checkout_details(pp_details_request)
+      # Create PAYPAL recurring profile
+      response = create_recurrling(amount, express_checkout, gateway_options)
 
-      pp_request = provider.build_do_express_checkout_payment({
-        :DoExpressCheckoutPaymentRequestDetails => {
-          :PaymentAction => "Sale",
-          :Token => express_checkout.token,
-          :PayerID => express_checkout.payer_id,
-          :PaymentDetails => pp_details_response.get_express_checkout_details_response_details.PaymentDetails
-        }
-      })
-      pp_response = provider.do_express_checkout_payment(pp_request)
+      if response.success?
+        express_checkout.update_column(:profile_id, response.profile_id)
 
-      if pp_response.success?
-        # We need to store the transaction id for the future.
-        # This is mainly so we can use it later on to refund the payment if the user wishes.
-        transaction_id = pp_response.do_express_checkout_payment_response_details.payment_info.first.transaction_id
-        express_checkout.update_column(:transaction_id, transaction_id)
-        # This is rather hackish, required for payment/processing handle_response code.
-
-        # Create PAYPAL recurring profile
-        recurring_profile_id = create_recurrling(amount, express_checkout, gateway_options)
-        express_checkout.update_column(:profile_id, recurring_profile_id)
-
-        return Class.new do
+        Class.new do
           def success?; true; end
           def authorization; nil; end
         end.new
       else
-        class << pp_response
+        class << response
           def to_s
             errors.map(&:long_message).join(" ")
           end
         end
-        pp_response
+        response
       end
     end
 
@@ -134,7 +114,7 @@ module Spree
         outstanding: :next_billing 
       ) 
       response = ppr.create_recurring_profile
-      return response.profile_id
+      return response
     end
   end
 end
