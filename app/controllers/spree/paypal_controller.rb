@@ -38,6 +38,8 @@ module Spree
         :amount => order.total,
         :payment_method => payment_method
       })
+      order.state = "payment"
+      order.save
       order.next
       if order.complete?
         flash.notice = Spree.t(:order_processed_successfully)

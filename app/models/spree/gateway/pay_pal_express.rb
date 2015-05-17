@@ -79,21 +79,31 @@ module Spree
       # Get the checkout cart description ### IF THE TWO DESCRIPTOIN NOT THE SAME, AN ERROR WILL HAPPEND
       checkout = PayPal::Recurring.new(token: express_checkout.token)
       checkout_description = checkout.checkout_details
-
-      ppr = PayPal::Recurring.new(
-        amount:      amount, 
-        currency:    gateway_options[:currency], 
-        description: checkout_description.description, 
-        frequency:   1, 
-        token:       express_checkout.token, 
-        period:      :monthly, 
-        payer_id:    express_checkout.payer_id, 
-        start_at:    Time.now, 
-        failed:      1, 
-        outstanding: :next_billing 
-      ) 
-      response = ppr.create_recurring_profile
-      return response
+      ppr = PayPal::Recurring.new({
+        :token       => express_checkout.token,
+        :payer_id    => express_checkout.payer_id,
+        :amount      => amount,
+        :currency    => gateway_options[:currency], 
+        :description => checkout_description.description
+      })
+      
+      response = ppr.request_payment
+      if response.approved?
+        ppr = PayPal::Recurring.new(
+          amount:      amount, 
+          currency:    gateway_options[:currency], 
+          description: checkout_description.description, 
+          frequency:   1, 
+          token:       express_checkout.token, 
+          period:      :monthly, 
+          payer_id:    express_checkout.payer_id, 
+          start_at:    Time.now + 1.months, 
+          failed:      1, 
+          outstanding: :next_billing 
+        ) 
+        response = ppr.create_recurring_profile
+      end
+      response
     end
 
     # Changes the response object to handle spree gateway methods
